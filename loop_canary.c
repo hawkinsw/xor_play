@@ -12,8 +12,46 @@
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <alloca.h>
 
 #define FORCE_STACK_PROTECTOR char buffer[400];
+
+void walk_canaries() {
+	void *rsp = NULL;
+	uint64_t offset = 0;
+	uint64_t canary = 0;
+	int counter = 0;
+	/*
+	 * Without the nop here, fix_canaries
+	 * believes that this is a push canary operation.
+	 */
+	asm volatile ("mov %%fs:0x28, %0\n"
+	              "nop\n"
+	     : "+r" (offset)
+			 :
+			 :);
+	//rsp = (void*)(((uint64_t)&rsp) & 0xabcdef);
+	rsp = &rsp;
+
+	printf("rsp: %p\n", rsp);
+	rsp = (void*)((uint64_t)rsp >> 16);
+	rsp = (void*)((uint64_t)rsp << 16);
+	printf("rsp: %p\n", rsp);
+
+	printf("fs:0x28: %lx\n", offset);
+	offset &= 0xFFFF;
+	printf("fs:0x28: %lx\n", offset);
+
+	rsp += offset;
+	while (((uint64_t)rsp & 0xFFFF) != 0xFFFF) {
+		printf(" rsp: %p\n", rsp);
+		printf("*rsp: %lx\n", *((uint64_t*)(rsp)));
+		rsp += *(uint64_t*)rsp & 0xFFFF;
+		if (counter > 15) break;
+		counter++;
+	}
+	printf(" rsp: %p (final)\n", rsp);
+}
 
 void set_canary64(uint64_t new_canary) {
 	uint64_t old_canary;
@@ -58,18 +96,24 @@ uint32_t read_random32(void) {
 
 int loop(int v) {
 	FORCE_STACK_PROTECTOR;
+	void *sp = NULL;
+
 	printf("entering v: %d\n", v);
+
+	sp = alloca(v*sizeof(char));
+
 	if (v == 1) {
 		/*
 		 * Because this rewrites the entire 64 bit
 		 * canary value, it will cause previously
-		 * pushed canaries to fail to decode. 
+		 * pushed canaries to fail to decode.
 		 */
-		set_canary64(read_random64());
+		//set_canary64(read_random64());
+		walk_canaries();
 	}
 	else {
-		set_canary32(read_random32());
-	}		
+		//set_canary32(read_random32());
+	}
 	if (v>0)
 		loop(--v);
 	printf("exiting  v: %d\n", v+1);
@@ -77,7 +121,7 @@ int loop(int v) {
 }
 
 int main() {
-	//set_canary64(read_random64());
+	set_canary64(0xFFFFFFFFFFFFFFFF);
 	loop(10);
 	return 0;
 }
